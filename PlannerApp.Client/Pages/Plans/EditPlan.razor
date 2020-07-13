@@ -1,0 +1,272 @@
+﻿@page "/editplan/{id}"
+@inject PlansService plansService
+@inject ToDoItemsService toDoItemService
+@inject IFileReaderService fileReaderService
+@inject NavigationManager navigationManager
+@attribute [Authorize]
+
+<h3>@planRequest.Title</h3>
+
+<div class="row">
+    <div class="col-6">
+        <EditForm Model="planRequest" OnValidSubmit="async () => await editPlanAsync()">
+            <RadzenCard>
+                <AlertMessage Message="@message" MessageType="@messageType"></AlertMessage>
+                <DataAnnotationsValidator />
+                <ValidationSummary />
+
+                <RadzenTextBox Placeholder="Title" @bind-Value="planRequest.Title" Style="margin:10px 0px;" />
+                <RadzenTextArea Placeholder="Desciption" @bind-Value="planRequest.Description" Style="margin:10px 0px;" />
+                <input type="file" accept=".png, .jpg, .jpeg, .bmp" @ref="inputReference" @onchange="async () => await ChooseFileAsync()" />
+                <hr />
+                <img style="width:100%;" src="@imageContent" />
+                <hr />
+                <RadzenButton ButtonType="Radzen.ButtonType.Submit" ButtonStyle="Radzen.ButtonStyle.Success" Disabled="isBusy" class="btn btn-block" Text="Add" />
+            </RadzenCard>
+        </EditForm>
+    </div>
+
+    <div class="col-6">
+        <RadzenCard Style="color:black;">
+            <h2>Plans's items</h2>
+            <AlertMessage Message="@message" MessageType="@messageType"></AlertMessage>
+            <EditForm Model="toDoItemRequest" OnValidSubmit="async () => await SubmitItemFormAsync()">
+                <DataAnnotationsValidator />
+                <ValidationSummary />
+                <table>
+                    <tr>
+                        <td>
+                            <RadzenButton Text="*" Disabled="isBusy" Click="clearSelection" ButtonStyle="Radzen.ButtonStyle.Info" ButtonType="Radzen.ButtonType.Button" />
+                        </td>
+                        <td>
+                            <RadzenTextBox Placeholder="Item description ..." @bind-Value="toDoItemRequest.Description" />
+                        </td>
+                        <td>
+                            <RadzenButton Text="Submit" Disabled="isBusy" ButtonStyle="Radzen.ButtonStyle.Primary" ButtonType="Radzen.ButtonType.Submit" />
+                        </td>
+                    </tr>
+                    @foreach (var item in toDoItems)
+                    {
+                        string descriptionStyle = item.IsDone ? "text-decoration-line: line-through" : "text-decoration-line: none";
+                        string rowStyle = selectedItem == item ? "cursor: pointer;background: lightblue" : "cursor: pointer;background: white;";
+                        <tr style="@rowStyle" @onclick="() => selectItem(item)">
+                            <td>
+                                <RadzenCheckBox @bind-Value="item.IsDone" @onclick="async () => await ChangeItemStateAsync(item.Id)" />
+                            </td>
+                            <td>
+                                <span style="@descriptionStyle">@item.Description</span>
+                            </td>
+                            <td>
+                                <RadzenButton Text="X" Disabled="isBusy" ButtonStyle="Radzen.ButtonStyle.Danger" ButtonType="Radzen.ButtonType.Button"
+                                              Click="async () => await RemoveItemAsync(item)" />
+                            </td>
+                        </tr>
+                    }
+                </table>
+            </EditForm>
+        </RadzenCard>
+    </div>
+</div>
+
+@code {
+
+    [CascadingParameter]
+    private Task<AuthenticationState> authenticationState { get; set; }
+
+    [Parameter]
+    public string Id { get; set; }
+
+    PlanRequest planRequest = new PlanRequest();
+    System.IO.Stream fileStream = null;
+    string imageContent = string.Empty;
+    string fileName = string.Empty;
+
+    bool isBusy = false;
+
+    ElementReference inputReference;
+
+    string message = string.Empty;
+    Models.AlertMessageType messageType = Models.AlertMessageType.Success;
+
+    List<ToDoItem> toDoItems = new List<ToDoItem>();
+    ToDoItem selectedItem = null;
+    ToDoItemRequest toDoItemRequest = new ToDoItemRequest();
+
+    protected async override Task OnInitializedAsync()
+    {
+        var userState = authenticationState.Result;
+        plansService.AccessToken = userState.User.FindFirst("AccessToken").Value;
+        toDoItemService.AccessToken = userState.User.FindFirst("AccessToken").Value;
+
+        await GetPlanById();
+    }
+
+    async Task ChooseFileAsync()
+    {
+        var file = (await fileReaderService.CreateReference(inputReference).EnumerateFilesAsync()).FirstOrDefault();
+        if (file == null)
+        {
+            message = string.Empty;
+            return;
+        }
+
+        var fileInfo = await file.ReadFileInfoAsync();
+        string extension = System.IO.Path.GetExtension(fileInfo.Name);
+        var allowedExtensions = new string[] { ".jpg", ".png", ".bmp" };
+
+        if (!allowedExtensions.Contains(extension))
+        {
+            message = "The chosen file is not a valid image file";
+            messageType = Models.AlertMessageType.Error;
+            return;
+        }
+
+        using (var memoryStream = await file.CreateMemoryStreamAsync())
+        {
+            fileStream = new System.IO.MemoryStream(memoryStream.ToArray());
+            fileName = fileInfo.Name;
+            imageContent = $"data:{fileInfo.Type};base64, {Convert.ToBase64String(memoryStream.ToArray())}";
+        }
+    }
+
+    async Task editPlanAsync()
+    {
+        isBusy = true;
+
+        planRequest.CoverFile = fileStream;
+        planRequest.FileName = fileName;
+        var result = await plansService.EditPlanAsync(planRequest);
+
+        if (result.IsSuccess)
+        {
+            message = "Edit successful";
+            messageType = Models.AlertMessageType.Success;
+        }
+        else
+        {
+            message = result.Message;
+            messageType = Models.AlertMessageType.Error;
+        }
+
+        isBusy = false;
+    }
+
+    async Task GetPlanById()
+    {
+        isBusy = true;
+
+        var result = await plansService.GetPlanByIdAsync(Id);
+        if (result.IsSuccess)
+        {
+            planRequest.Id = Id;
+            planRequest.Title = result.Record.Title;
+            planRequest.Description = result.Record.Description;
+            imageContent = result.Record.CoverPath;
+            toDoItems = result.Record.ToDoItems.ToList();
+        }
+        else
+        {
+            message = result.Message;
+            messageType = Models.AlertMessageType.Error;
+        }
+
+        isBusy = false;
+    }
+
+    async Task InsertItemAsync()
+    {
+        isBusy = true;
+
+        toDoItemRequest.PlanId = Id;
+        var result = await toDoItemService.CreateItemAsync(toDoItemRequest);
+        if (result.IsSuccess)
+        {
+            toDoItems.Add(result.Record);
+        }
+        else
+        {
+            message = result.Message;
+            messageType = Models.AlertMessageType.Error;
+        }
+
+        isBusy = false;
+    }
+
+    async Task SubmitItemFormAsync()
+    {
+        if (selectedItem == null)
+        {
+            await InsertItemAsync();
+        }
+        else
+        {
+            await EditItemAsync();
+        }
+    }
+
+    async Task ChangeItemStateAsync(string id)
+    {
+        isBusy = true;
+
+        var result = await toDoItemService.ChangeItemStateAsync(id);
+        if (!result.IsSuccess)
+        {
+            message = result.Message;
+            messageType = Models.AlertMessageType.Error;
+        }
+
+        isBusy = false;
+    }
+
+    void selectItem(ToDoItem toDoItem)
+    {
+        selectedItem = toDoItem;
+        toDoItemRequest.Id = toDoItem.Id;
+        toDoItemRequest.Description = toDoItem.Description;
+    }
+
+    async Task EditItemAsync()
+    {
+        isBusy = true;
+
+        toDoItemRequest.PlanId = Id;
+        var result = await toDoItemService.CreateItemAsync(toDoItemRequest);
+        if (result.IsSuccess)
+        {
+            var editedItem = toDoItems.SingleOrDefault(i => i.Id == result.Record.Id);
+            editedItem.Description = result.Record.Description;
+        }
+        else
+        {
+            message = result.Message;
+            messageType = Models.AlertMessageType.Error;
+        }
+
+        isBusy = false;
+    }
+
+    void clearSelection()
+    {
+        selectedItem = null;
+        toDoItemRequest.Id = null;
+        toDoItemRequest.Description = null;
+    }
+
+    async Task RemoveItemAsync(ToDoItem toDoItem)
+    {
+        isBusy = true;
+
+        var result = await toDoItemService.DeleteItemAsync(toDoItem.Id);
+        if (result.IsSuccess)
+        {
+            toDoItems.Remove(toDoItem);
+        }
+        else
+        {
+            message = result.Message;
+            messageType = Models.AlertMessageType.Error;
+        }
+
+        isBusy = false;
+    }
+}

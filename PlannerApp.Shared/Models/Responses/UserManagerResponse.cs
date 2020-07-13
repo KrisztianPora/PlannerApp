@@ -1,0 +1,20 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Text;
+using System.Text.Json.Serialization;
+
+namespace PlannerApp.Shared.Models
+{
+    public class UserManagerResponse
+    {
+        public string Message { get; set; }
+
+        public bool IsSuccess { get; set; }
+
+        public string[] Errors { get; set; }
+
+        public Dictionary<string,string> UserInfo { get; set; }
+
+        public DateTime? ExpireDate { get; set; }
+    }
+}
